@@ -6,31 +6,27 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="부동산 신축 분석기 v5.6 (강제조립)", layout="wide")
+st.set_page_config(page_title="부동산 신축 분석기 v5.7 (주소교체)", layout="wide")
 
-st.title("🏗️ 부동산 신축 사업성 분석기 v5.6")
+st.title("🏗️ 부동산 신축 사업성 분석기 v5.7")
 st.markdown("---")
 
-# --- [핵심] 분석 도구 (주소 강제 조립 방식) ---
+# --- [핵심] 분석 도구 (규제 정보 서비스용) ---
 def analyze_land(sess, key, pnu):
-    base_url = "http://apis.data.go.kr/1613000/NSLandUseInfoService/getLandUsePlanInfo"
+    # [수정됨] 선생님이 가진 키에 맞는 '규제(Regulation)' 서비스 주소로 변경
+    # 기존: NSLandUseInfoService (계획) -> 변경: arLandUseInfoService (규제)
+    base_url = "http://apis.data.go.kr/1613000/arLandUseInfoService/getLandUseInfo"
     
-    # [중요] 파이썬이 키를 건드리지 못하게 주소를 직접 문자열로 만듭니다.
-    # 키에 공백이 있으면 안 되므로 .strip() 사용
     clean_key = key.strip()
-    
-    # URL 직접 조립 (Nuclear Option)
+    # URL 직접 조립
     final_url = f"{base_url}?serviceKey={clean_key}&pnu={pnu}&format=xml"
     
     try:
-        # params를 쓰지 않고 final_url을 그대로 쏩니다.
         res_g = sess.get(final_url, timeout=10)
         
-        # 500 에러가 나면 내용을 보여줌
         if res_g.status_code == 500:
-             st.error("💥 정부 서버 내부 오류 (500 Error)")
-             st.warning("키가 잘못되었거나, 해당 PNU에 대한 데이터가 없습니다.")
-             st.caption(f"요청한 주소: {final_url}") # 디버깅용
+             st.error("💥 여전히 500 에러가 발생합니다.")
+             st.warning("팁: 만약 이 에러가 계속되면, '공공데이터포털'에서 [토지이용'계획'정보서비스]를 새로 신청해야 할 수도 있습니다.")
              return
 
         try:
@@ -40,17 +36,24 @@ def analyze_land(sess, key, pnu):
             if header_msg and "NORMAL SERVICE" not in header_msg:
                 st.error(f"🏛️ 정부 서버 에러: {header_msg}")
                 if "SERVICE KEY" in header_msg:
-                        st.info("💡 키가 아직 등록되지 않았거나, 잘못된 키입니다.")
+                        st.info("💡 키 등록 대기 중이거나 잘못된 키입니다.")
             else:
+                # 규제 서비스는 태그 이름이 다를 수 있어 여러가지 시도
                 target_area = "정보 없음"
-                items = root.findall(".//lndcgrCodeNm")
+                
+                # 1순위: 용도지역 이름 찾기 (prposAreaNm 등)
+                items = root.findall(".//prposAreaNm") # 규제 서비스용 태그
+                if not items:
+                    items = root.findall(".//lndcgrCodeNm") # 계획 서비스용 태그 (혹시 몰라 유지)
+                
                 for item in items:
-                    if item.text and "지역" in item.text:
+                    if item.text and ("지역" in item.text or "주거" in item.text or "상업" in item.text):
                         target_area = item.text
                         break
                 
                 if target_area == "정보 없음":
-                    st.warning("데이터는 가져왔으나, '용도지역' 정보가 비어있습니다.")
+                    st.warning("데이터 조회 성공! 하지만 '용도지역' 글자를 찾지 못했습니다. (데이터 구조 차이)")
+                    st.code(res_g.text) # 데이터 내용을 직접 확인
                 else:
                     st.success(f"🏛️ 정부 데이터 조회 성공! 이 땅은 **[{target_area}]** 입니다.")
                 
@@ -76,7 +79,7 @@ def analyze_land(sess, key, pnu):
 
 # --- 좀비 접속기 설정 ---
 session = requests.Session()
-retries = Retry(total=3, backoff_factor=1, status_forcelist=[502, 503, 504]) # 500은 즉시 확인 위해 뺌
+retries = Retry(total=3, backoff_factor=1, status_forcelist=[502, 503, 504])
 session.mount('http://', HTTPAdapter(max_retries=retries))
 session.mount('https://', HTTPAdapter(max_retries=retries))
 
@@ -96,7 +99,6 @@ with tab1:
         if not vworld_key:
             st.error("브이월드 키가 필요합니다.")
         else:
-            # 브이월드 로직
             headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://share.streamlit.io"}
             v_url = "http://api.vworld.kr/req/search"
             params = {
