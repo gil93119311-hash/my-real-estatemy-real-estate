@@ -2,10 +2,14 @@ import streamlit as st
 import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
+import urllib3
 
-st.set_page_config(page_title="부동산 신축 분석기 v5.0 (최종)", layout="wide")
+# SSL 경고 무시 설정 (접속 강제 수행을 위함)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.title("🏗️ 부동산 신축 사업성 분석기 v5.0")
+st.set_page_config(page_title="부동산 신축 분석기 v5.1 (접속패치)", layout="wide")
+
+st.title("🏗️ 부동산 신축 사업성 분석기 v5.1")
 st.markdown("---")
 
 # --- 사이드바: API 키 설정 ---
@@ -25,12 +29,13 @@ if st.button("🚀 자동 분석 시작"):
     elif not address:
         st.error("주소를 입력해주세요.")
     else:
-        # 1단계: 브이월드 (HTTPS 보안 연결 + 헤더 추가)
-        # v5.0 핵심: http -> https 로 변경하고, 브라우저인 척 헤더(User-Agent)를 추가함
-        vworld_url = "https://api.vworld.kr/req/search"
+        # 헤더 설정 (브라우저인 척 속임)
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36"
         }
+        
+        # 1단계: 브이월드 (verify=False 옵션 추가로 접속 강제)
+        vworld_url = "https://api.vworld.kr/req/search"
         params_v = {
             "service": "search",
             "request": "search",
@@ -46,21 +51,20 @@ if st.button("🚀 자동 분석 시작"):
         }
         
         try:
-            # timeout을 10초로 늘리고 headers 추가
-            res_v = requests.get(vworld_url, params=params_v, headers=headers, timeout=10)
+            # verify=False: 보안 인증서 검사 생략 (끊김 방지)
+            res_v = requests.get(vworld_url, params=params_v, headers=headers, verify=False, timeout=10)
             
-            # JSON인지 확인 (502 에러 방지)
             try:
                 data_v = res_v.json()
             except:
-                st.error("🚨 브이월드 서버 연결 실패 (502/500 Error)")
-                st.write("서버 응답 내용:", res_v.text)
+                st.error("🚨 브이월드 접속 실패")
+                st.write(res_v.text)
                 st.stop()
 
             if data_v['response']['status'] == 'OK':
-                # 결과가 있는지 확인
+                # 검색 결과 개수 확인
                 if int(data_v['response']['result']['input']['total']) == 0:
-                     st.warning("검색 결과가 없습니다. 주소를 '서울 XX구 XX동 00-0' 형식으로 정확히 적어주세요.")
+                     st.warning("검색 결과가 없습니다. 주소를 정확히 입력해주세요.")
                      st.stop()
 
                 pnu_code = data_v['response']['result']['items'][0]['id']
@@ -69,7 +73,7 @@ if st.button("🚀 자동 분석 시작"):
                 st.success(f"✅ 주소 확인 완료: {official_addr}")
                 st.caption(f"PNU 코드: {pnu_code}")
                 
-                # 2단계: 공공데이터포털 (토지이용계획)
+                # 2단계: 공공데이터포털 (verify=False 옵션 추가)
                 gov_url = "http://apis.data.go.kr/1613000/NSLandUseInfoService/getLandUsePlanInfo"
                 params_g = {
                     "serviceKey": requests.utils.unquote(gov_key.strip()),
@@ -77,7 +81,7 @@ if st.button("🚀 자동 분석 시작"):
                     "format": "xml"
                 }
                 
-                res_g = requests.get(gov_url, params=params_g, headers=headers, timeout=10)
+                res_g = requests.get(gov_url, params=params_g, headers=headers, verify=False, timeout=10)
                 
                 try:
                     root = ET.fromstring(res_g.content)
@@ -86,7 +90,7 @@ if st.button("🚀 자동 분석 시작"):
                     if header_msg and "NORMAL SERVICE" not in header_msg:
                         st.error(f"🏛️ 정부 서버 에러: {header_msg}")
                         if "SERVICE KEY" in header_msg:
-                             st.info("💡 해결책: 키가 아직 등록되지 않았습니다. 1시간 뒤 다시 시도해주세요.")
+                             st.info("💡 키 등록 대기 중입니다. (1시간 소요)")
                     else:
                         target_area = "정보 없음"
                         items = root.findall(".//lndcgrCodeNm")
@@ -105,13 +109,14 @@ if st.button("🚀 자동 분석 시작"):
                         elif "준주거" in target_area: auto_bc, auto_far = 60, 400
                         elif "상업" in target_area: auto_bc, auto_far = 60, 800
                         
+                        # 화면 표시
+                        st.markdown("---")
                         col1, col2 = st.columns(2)
-                        with col1: st.metric("건폐율", f"{auto_bc}%")
-                        with col2: st.metric("용적률", f"{auto_far}%")
+                        with col1: st.metric("건폐율 (자동)", f"{auto_bc}%")
+                        with col2: st.metric("용적률 (자동)", f"{auto_far}%")
                         
                 except ET.ParseError:
-                    st.error("XML 해석 실패 (공공데이터포털 응답 오류)")
-                    st.code(res_g.text)
+                    st.error("XML 데이터 해석 실패")
 
             else:
                 st.error("주소를 찾을 수 없습니다.")
