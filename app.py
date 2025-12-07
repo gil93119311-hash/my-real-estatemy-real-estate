@@ -2,180 +2,114 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import requests
+
 # --- 페이지 설정 ---
-st.set_page_config(page_title="부동산 신축 분석기 v2", layout="wide")
+st.set_page_config(page_title="부동산 신축 분석기 v3.0 (자동화)", layout="wide")
 
-st.title("🏗️ 부동산 신축 사업성 분석기 v2.0")
-# --- 공공데이터 키 입력 (사이드바) ---
-st.sidebar.markdown("---")
-st.sidebar.header("🔑 공공데이터 설정")
-public_api_key = st.sidebar.text_input("인증키 입력 (디코딩 키)", type="password")
-
-if st.sidebar.button("키 연결 테스트"):
-    if public_api_key:
-        st.sidebar.success("키가 입력되었습니다! (1시간 뒤 작동)")
-    else:
-        st.sidebar.error("키를 먼저 입력해주세요.")
+st.title("🏗️ 부동산 신축 사업성 분석기 v3.0")
 st.markdown("---")
 
-# --- 사이드바: 입력 조건 ---
-with st.sidebar:
-    st.header("1. 토지 및 건축 정보")
-    land_area = st.number_input("대지면적 (평)", value=35.0, step=0.1)
-    
-    # 건폐율은 보통 주거지역 60% 가정 (입력 가능하게 변경)
-    bc_ratio = st.slider("건폐율 (%) - 바닥 면적", 0, 100, 60)
-    # 용적률
-    far_ratio = st.slider("용적률 (%) - 전체 층 면적 합계", 0, 400, 200)
+# --- 사이드바: API 키 설정 ---
+st.sidebar.header("🔑 시스템 설정")
+# 매번 입력하기 귀찮으면 value="여기에_키_입력" 처럼 따옴표 안에 키를 넣어두셔도 됩니다.
+public_api_key = st.sidebar.text_input("1. 공공데이터포털 키 (Decoding)", type="password")
+vworld_key = st.sidebar.text_input("2. 브이월드 키", type="password")
 
-    st.header("2. 비용 설정 (단위: 만원)")
-    land_price_per_pyung = st.number_input("평당 토지 매입비", value=5000, step=100)
-    const_cost_per_pyung = st.number_input("평당 건축비", value=800, step=50)
-    
-    st.header("3. 세대 구성 설정")
-    # 전용률(실사용면적 비율) 가정
-    efficiency_ratio = 80 # %
-    
-    st.subheader("평형대 설정")
-    size_1_5 = st.number_input("1.5룸 크기 (평)", value=8.0)
-    size_2_0 = st.number_input("투룸 크기 (평)", value=12.0)
-    
-    st.subheader("구성 비율")
-    ratio_1_5 = st.slider("1.5룸 비율 (%)", 0, 100, 50)
-    # 투룸 비율은 자동으로 나머지
-    ratio_2_0 = 100 - ratio_1_5
-    st.info(f"투룸 비율: {ratio_2_0}%")
+st.sidebar.markdown("---")
 
-    st.header("4. 매출 설정")
-    sales_price_per_pyung = st.number_input("평당 예상 분양가 (만원)", value=3500)
+# --- 메인 기능: 주소 검색 ---
+st.subheader("📍 분석할 땅의 주소를 입력하세요")
+address = st.text_input("지번 주소 입력 (예: 서울 강남구 삼성동 123)", "")
 
-# --- 계산 로직 ---
+# --- 자동 분석 로직 ---
+if st.button("🚀 자동 분석 시작"):
+    if not public_api_key or not vworld_key:
+        st.error("좌측 사이드바에 API 키 2개를 모두 입력해주세요!")
+    elif not address:
+        st.error("주소를 입력해주세요.")
+    else:
+        # 1단계: 브이월드에게 PNU(땅 코드) 물어보기
+        vworld_url = "http://api.vworld.kr/req/search"
+        params_v = {
+            "service": "search",
+            "request": "search",
+            "version": "2.0",
+            "crs": "EPSG:4326",
+            "size": "1",
+            "page": "1",
+            "query": address,
+            "type": "address",
+            "category": "parcel",
+            "format": "json",
+            "key": vworld_key
+        }
+        
+        try:
+            res_v = requests.get(vworld_url, params=params_v)
+            data_v = res_v.json()
+            
+            if data_v['response']['status'] == 'OK':
+                # PNU 코드와 공식 주소 추출
+                pnu_code = data_v['response']['result']['items'][0]['id'] # 브이월드는 id가 PNU임
+                official_addr = data_v['response']['result']['items'][0]['title']
+                
+                st.success(f"✅ 주소 확인 완료: {official_addr}")
+                st.info(f"땅 고유 코드(PNU): {pnu_code}")
+                
+                # 2단계: 공공데이터포털에게 용도지역 물어보기
+                # (토지이용계획정보 API)
+                gov_url = "http://apis.data.go.kr/1613000/NSLandUseInfoService/getLandUsePlanInfo"
+                params_g = {
+                    "serviceKey": requests.utils.unquote(public_api_key),
+                    "pnu": pnu_code,
+                    "format": "json"
+                }
+                
+                res_g = requests.get(gov_url, params=params_g)
+                
+                # 용도지역 찾기 로직
+                target_area = "정보 없음"
+                try:
+                    items = res_g.json()['landUsePlanInfoList']
+                    # 데이터 중에서 '지역지구명'만 쏙 뽑아내기
+                    for item in items:
+                        if "지역" in item['lndcgrCodeNm']: # 용도지역 관련 코드만 필터링
+                            target_area = item['lndcgrCodeNm']
+                            break # 첫 번째 발견된 주요 지역 정보 사용
+                except:
+                    target_area = "데이터 조회 실패 (또는 해당 정보 없음)"
 
-# 1. 면적 계산
-building_area = land_area * (bc_ratio / 100) # 건축면적 (바닥)
-total_floor_area = land_area * (far_ratio / 100) # 연면적 (전체)
+                st.success(f"🏛️ 정부 데이터 조회 성공! 이 땅은 **[{target_area}]** 입니다.")
+                
+                # 3단계: 조회된 정보로 기본값 세팅 (예시)
+                # 용도지역에 따른 건폐율/용적률 자동 추천
+                auto_bc = 60 # 기본값
+                auto_far = 200 # 기본값
+                
+                if "1종" in target_area:
+                    auto_bc, auto_far = 60, 150
+                elif "2종" in target_area:
+                    auto_bc, auto_far = 60, 200
+                elif "3종" in target_area:
+                    auto_bc, auto_far = 50, 250
+                elif "준주거" in target_area:
+                    auto_bc, auto_far = 60, 400
+                elif "상업" in target_area:
+                    auto_bc, auto_far = 60, 800
+                
+                st.write(f"👉 **{target_area}** 법규에 따라 건폐율 {auto_bc}%, 용적률 {auto_far}%를 자동 적용합니다.")
 
-# 2. 층수 추정 (단순 계산: 연면적 / 건축면적)
-if building_area > 0:
-    estimated_floors = total_floor_area / building_area
-else:
-    estimated_floors = 0
+                # --- 결과 보여주기 (기존 계산기 UI 연동) ---
+                st.markdown("---")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("대지면적 (예상)", "35 평 (자동연동 예정)")
+                with col2:
+                    st.metric("추천 용적률", f"{auto_far}%")
 
-# 3. 세대수 계산 (전용면적 기준)
-net_area = total_floor_area * (efficiency_ratio / 100) # 복도/계단 제외한 실 면적
-area_for_1_5 = net_area * (ratio_1_5 / 100)
-area_for_2_0 = net_area * (ratio_2_0 / 100)
-
-count_1_5 = int(area_for_1_5 / size_1_5) if size_1_5 > 0 else 0
-count_2_0 = int(area_for_2_0 / size_2_0) if size_2_0 > 0 else 0
-total_units = count_1_5 + count_2_0
-
-# 4. 주차 대수 (서울시 다세대 기준: 대략 세대당 0.7대 or 면적기반. 여기선 단순화하여 세대당 0.8대 가정)
-parking_needed = round(total_units * 0.8)
-
-# 5. 사업성 분석 (단위: 억 원으로 변환)
-# 토지비 = 평수 * 평당가격(만원) -> 만원 단위 -> 억 단위로 나누기(10000)
-total_land_cost = (land_area * land_price_per_pyung) / 10000 
-total_const_cost = (total_floor_area * const_cost_per_pyung) / 10000
-total_cost = total_land_cost + total_const_cost # 기타비용 제외한 단순 합계
-
-total_sales = (total_floor_area * sales_price_per_pyung) / 10000
-net_profit = total_sales - total_cost
-roi = (net_profit / total_cost) * 100 if total_cost > 0 else 0
-
-# --- 결과 화면 출력 ---
-
-# [상단] 핵심 지표
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("예상 연면적", f"{total_floor_area:.1f} 평")
-col2.metric("총 사업비", f"{total_cost:.1f} 억")
-col3.metric("예상 순수익", f"{net_profit:.1f} 억", delta=f"{roi:.1f}% 수익률")
-col4.metric("총 세대수", f"{total_units} 세대")
-
-# [중단] 상세 건축 개요 & 3D
-st.subheader("📊 상세 건축 개요 및 시각화")
-
-c1, c2 = st.columns([1, 1])
-
-with c1:
-    st.markdown("#### 1. 건축 개요")
-    summary_data = {
-        "항목": ["대지면적", "건축면적", "연면적", "건폐율 / 용적률", "예상 층수", "필요 주차대수"],
-        "내용": [
-            f"{land_area} 평",
-            f"{building_area:.1f} 평",
-            f"{total_floor_area:.1f} 평",
-            f"{bc_ratio}% / {far_ratio}%",
-            f"지상 {int(estimated_floors)} 층 (필로티 제외)",
-            f"약 {parking_needed} 대"
-        ]
-    }
-    st.table(pd.DataFrame(summary_data))
-
-    st.markdown("#### 2. 세대 구성 (예상)")
-    unit_data = {
-        "타입": ["1.5룸", "투룸"],
-        "평형": [f"{size_1_5} 평형", f"{size_2_0} 평형"],
-        "세대수": [f"{count_1_5} 세대", f"{count_2_0} 세대"]
-    }
-    st.table(pd.DataFrame(unit_data))
-
-with c2:
-    st.markdown("#### 3. 건물 3D 매스 (부피 예상도)")
-    
-    # 3D 박스 그리기 (Plotly Mesh3d 사용)
-    # 건물 크기 비례 설정 (가로, 세로, 높이)
-    # 대지를 정사각형으로 가정: 한 변의 길이 = sqrt(대지면적 * 3.3) meters
-    import math
-    side_length = math.sqrt(land_area * 3.3058) 
-    
-    # 건물 바닥 면적 (건폐율 적용)
-    bldg_side = side_length * math.sqrt(bc_ratio / 100)
-    
-    # 건물 높이 (층고 3m 가정 * 층수)
-    height = estimated_floors * 3.0
-
-    # 큐브 좌표 생성
-    x = [0, bldg_side, bldg_side, 0, 0, bldg_side, bldg_side, 0]
-    y = [0, 0, bldg_side, bldg_side, 0, 0, bldg_side, bldg_side]
-    z = [0, 0, 0, 0, height, height, height, height]
-    
-    # 인덱스 연결 (큐브 면 생성)
-    i = [7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2]
-    j = [3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3]
-    k = [0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6]
-
-    fig = go.Figure(data=[
-        go.Mesh3d(
-            x=x, y=y, z=z,
-            i=i, j=j, k=k,
-            opacity=0.6,
-            color='#4169E1',
-            flatshading=True,
-            name='건물'
-        )
-    ])
-    
-    # 바닥(땅) 추가
-    fig.add_trace(go.Mesh3d(
-        x=[-5, side_length+5, side_length+5, -5],
-        y=[-5, -5, side_length+5, side_length+5],
-        z=[0, 0, 0, 0],
-        i=[0, 0], j=[1, 2], k=[2, 3],
-        color='#D3D3D3', opacity=0.5, name='대지'
-    ))
-
-    fig.update_layout(
-        scene=dict(
-            xaxis=dict(visible=False),
-            yaxis=dict(visible=False),
-            zaxis=dict(visible=True, title='높이(m)'),
-            aspectmode='data' # 비율 유지
-        ),
-        margin=dict(l=0, r=0, b=0, t=0),
-        height=400
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.caption("※ 단순 부피(Mass) 시뮬레이션입니다. 실제 설계와 다를 수 있습니다.")
+            else:
+                st.error("주소를 찾을 수 없습니다. 정확한 지번 주소로 입력해 주세요.")
+                
+        except Exception as e:
+            st.error(f"오류가 발생했습니다: {e}")
+            st.warning("아직 API 키가 서버에 등록되지 않았을 수 있습니다. 1시간 뒤 다시 시도해보세요.")
