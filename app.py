@@ -3,14 +3,13 @@ import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
 
-st.set_page_config(page_title="부동산 신축 분석기 v4.1 (디버깅)", layout="wide")
+st.set_page_config(page_title="부동산 신축 분석기 v5.0 (최종)", layout="wide")
 
-st.title("🏗️ 부동산 신축 사업성 분석기 v4.1")
+st.title("🏗️ 부동산 신축 사업성 분석기 v5.0")
 st.markdown("---")
 
 # --- 사이드바: API 키 설정 ---
 st.sidebar.header("🔑 시스템 설정")
-# 순서가 섞이지 않게 명확히 표시
 gov_key = st.sidebar.text_input("1. 공공데이터포털 키 (Decoding)", type="password")
 vworld_key = st.sidebar.text_input("2. 브이월드 키 (영어+숫자)", type="password")
 
@@ -26,8 +25,12 @@ if st.button("🚀 자동 분석 시작"):
     elif not address:
         st.error("주소를 입력해주세요.")
     else:
-        # 1단계: 브이월드 (주소 -> PNU 변환)
-        vworld_url = "http://api.vworld.kr/req/search"
+        # 1단계: 브이월드 (HTTPS 보안 연결 + 헤더 추가)
+        # v5.0 핵심: http -> https 로 변경하고, 브라우저인 척 헤더(User-Agent)를 추가함
+        vworld_url = "https://api.vworld.kr/req/search"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
         params_v = {
             "service": "search",
             "request": "search",
@@ -39,22 +42,27 @@ if st.button("🚀 자동 분석 시작"):
             "type": "address",
             "category": "parcel",
             "format": "json",
-            "key": vworld_key.strip() # 공백 제거 안전장치
+            "key": vworld_key.strip()
         }
         
         try:
-            res_v = requests.get(vworld_url, params=params_v, timeout=10)
+            # timeout을 10초로 늘리고 headers 추가
+            res_v = requests.get(vworld_url, params=params_v, headers=headers, timeout=10)
             
-            # 브이월드 응답 디버깅
+            # JSON인지 확인 (502 에러 방지)
             try:
                 data_v = res_v.json()
             except:
-                st.error("🚨 브이월드 에러: JSON 응답이 아닙니다.")
-                st.warning("키가 잘못되었거나 서버 문제입니다. 아래 내용을 확인하세요.")
-                st.code(res_v.text) # 에러 내용 원본 출력
+                st.error("🚨 브이월드 서버 연결 실패 (502/500 Error)")
+                st.write("서버 응답 내용:", res_v.text)
                 st.stop()
 
             if data_v['response']['status'] == 'OK':
+                # 결과가 있는지 확인
+                if int(data_v['response']['result']['input']['total']) == 0:
+                     st.warning("검색 결과가 없습니다. 주소를 '서울 XX구 XX동 00-0' 형식으로 정확히 적어주세요.")
+                     st.stop()
+
                 pnu_code = data_v['response']['result']['items'][0]['id']
                 official_addr = data_v['response']['result']['items'][0]['title']
                 
@@ -69,16 +77,16 @@ if st.button("🚀 자동 분석 시작"):
                     "format": "xml"
                 }
                 
-                res_g = requests.get(gov_url, params=params_g, timeout=10)
+                res_g = requests.get(gov_url, params=params_g, headers=headers, timeout=10)
                 
-                # 공공데이터 응답 디버깅
                 try:
                     root = ET.fromstring(res_g.content)
                     header_msg = root.findtext(".//resultMsg")
                     
                     if header_msg and "NORMAL SERVICE" not in header_msg:
                         st.error(f"🏛️ 정부 서버 에러: {header_msg}")
-                        st.info("해결책: 키가 아직 등록 중입니다. 1시간 뒤 다시 시도하세요.")
+                        if "SERVICE KEY" in header_msg:
+                             st.info("💡 해결책: 키가 아직 등록되지 않았습니다. 1시간 뒤 다시 시도해주세요.")
                     else:
                         target_area = "정보 없음"
                         items = root.findall(".//lndcgrCodeNm")
@@ -106,8 +114,7 @@ if st.button("🚀 자동 분석 시작"):
                     st.code(res_g.text)
 
             else:
-                st.error("주소를 찾을 수 없습니다. (브이월드 검색 결과 없음)")
-                st.write(f"서버 응답: {data_v}")
+                st.error("주소를 찾을 수 없습니다.")
                 
         except Exception as e:
             st.error(f"시스템 접속 오류: {e}")
