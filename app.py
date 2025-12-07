@@ -2,14 +2,11 @@ import streamlit as st
 import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
-import urllib3
 
-# SSL 경고 무시 설정 (접속 강제 수행을 위함)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# 페이지 설정
+st.set_page_config(page_title="부동산 신축 분석기 v5.2 (우회)", layout="wide")
 
-st.set_page_config(page_title="부동산 신축 분석기 v5.1 (접속패치)", layout="wide")
-
-st.title("🏗️ 부동산 신축 사업성 분석기 v5.1")
+st.title("🏗️ 부동산 신축 사업성 분석기 v5.2")
 st.markdown("---")
 
 # --- 사이드바: API 키 설정 ---
@@ -29,13 +26,14 @@ if st.button("🚀 자동 분석 시작"):
     elif not address:
         st.error("주소를 입력해주세요.")
     else:
-        # 헤더 설정 (브라우저인 척 속임)
+        # 헤더 설정 (일반 브라우저처럼 위장)
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124 Safari/537.36"
         }
         
-        # 1단계: 브이월드 (verify=False 옵션 추가로 접속 강제)
-        vworld_url = "https://api.vworld.kr/req/search"
+        # 1단계: 브이월드 (HTTP로 변경하여 SSL 차단 회피)
+        # https -> http 로 변경됨
+        vworld_url = "http://api.vworld.kr/req/search"
         params_v = {
             "service": "search",
             "request": "search",
@@ -51,20 +49,26 @@ if st.button("🚀 자동 분석 시작"):
         }
         
         try:
-            # verify=False: 보안 인증서 검사 생략 (끊김 방지)
-            res_v = requests.get(vworld_url, params=params_v, headers=headers, verify=False, timeout=10)
+            # timeout을 넉넉하게 주고, HTTP로 요청
+            res_v = requests.get(vworld_url, params=params_v, headers=headers, timeout=15)
             
+            # 응답 상태 확인
+            if res_v.status_code != 200:
+                st.error(f"🚨 브이월드 접속 거부 (상태코드: {res_v.status_code})")
+                st.write("해결책: 잠시 후 다시 시도하거나, 주소를 확인해주세요.")
+                st.stop()
+
             try:
                 data_v = res_v.json()
             except:
-                st.error("🚨 브이월드 접속 실패")
-                st.write(res_v.text)
+                st.error("🚨 브이월드 응답 오류: JSON 형식이 아닙니다.")
+                st.code(res_v.text)
                 st.stop()
 
             if data_v['response']['status'] == 'OK':
-                # 검색 결과 개수 확인
+                # 검색 결과가 없는 경우 처리
                 if int(data_v['response']['result']['input']['total']) == 0:
-                     st.warning("검색 결과가 없습니다. 주소를 정확히 입력해주세요.")
+                     st.warning("검색 결과가 없습니다. 주소 오타를 확인해주세요.")
                      st.stop()
 
                 pnu_code = data_v['response']['result']['items'][0]['id']
@@ -73,7 +77,7 @@ if st.button("🚀 자동 분석 시작"):
                 st.success(f"✅ 주소 확인 완료: {official_addr}")
                 st.caption(f"PNU 코드: {pnu_code}")
                 
-                # 2단계: 공공데이터포털 (verify=False 옵션 추가)
+                # 2단계: 공공데이터포털 (HTTP 사용)
                 gov_url = "http://apis.data.go.kr/1613000/NSLandUseInfoService/getLandUsePlanInfo"
                 params_g = {
                     "serviceKey": requests.utils.unquote(gov_key.strip()),
@@ -81,7 +85,7 @@ if st.button("🚀 자동 분석 시작"):
                     "format": "xml"
                 }
                 
-                res_g = requests.get(gov_url, params=params_g, headers=headers, verify=False, timeout=10)
+                res_g = requests.get(gov_url, params=params_g, headers=headers, timeout=15)
                 
                 try:
                     root = ET.fromstring(res_g.content)
@@ -109,7 +113,6 @@ if st.button("🚀 자동 분석 시작"):
                         elif "준주거" in target_area: auto_bc, auto_far = 60, 400
                         elif "상업" in target_area: auto_bc, auto_far = 60, 800
                         
-                        # 화면 표시
                         st.markdown("---")
                         col1, col2 = st.columns(2)
                         with col1: st.metric("건폐율 (자동)", f"{auto_bc}%")
@@ -117,6 +120,7 @@ if st.button("🚀 자동 분석 시작"):
                         
                 except ET.ParseError:
                     st.error("XML 데이터 해석 실패")
+                    st.code(res_g.text)
 
             else:
                 st.error("주소를 찾을 수 없습니다.")
