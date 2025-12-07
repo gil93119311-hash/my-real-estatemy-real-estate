@@ -1,11 +1,21 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-
+import requests
 # --- 페이지 설정 ---
 st.set_page_config(page_title="부동산 신축 분석기 v2", layout="wide")
 
 st.title("🏗️ 부동산 신축 사업성 분석기 v2.0")
+# --- 공공데이터 키 입력 (사이드바) ---
+st.sidebar.markdown("---")
+st.sidebar.header("🔑 공공데이터 설정")
+public_api_key = st.sidebar.text_input("인증키 입력 (디코딩 키)", type="password")
+
+if st.sidebar.button("키 연결 테스트"):
+    if public_api_key:
+        st.sidebar.success("키가 입력되었습니다! (1시간 뒤 작동)")
+    else:
+        st.sidebar.error("키를 먼저 입력해주세요.")
 st.markdown("---")
 
 # --- 사이드바: 입력 조건 ---
@@ -167,4 +177,5 @@ with c2:
     )
     
     st.plotly_chart(fig, use_container_width=True)
+
     st.caption("※ 단순 부피(Mass) 시뮬레이션입니다. 실제 설계와 다를 수 있습니다.")
