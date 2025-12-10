@@ -1,108 +1,91 @@
-
-
 import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
 import urllib3
 import urllib.parse
 
-# SSL 경고 무시
+# SSL 경고 무시 (접속 성공률 높임)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-st.set_page_config(page_title="부동산 신축 분석기 v7.2 (최적화)", layout="wide")
+st.set_page_config(page_title="부동산 신축 분석기 v7.3 (정밀진단)", layout="wide")
 
-st.title("🏗️ 부동산 신축 사업성 분석기 v7.2")
+st.title("🏗️ 부동산 신축 사업성 분석기 v7.3")
 st.markdown("---")
-st.success("💡 선생님의 마이페이지 2번째 목록인 **[토지이용규제법령]** 키를 넣으시면 100% 작동합니다!")
+st.info("🔎 선생님의 마이페이지에 적힌 **[arLandUseInfoService]** 주소로 **[HTTPS]** 접속을 시도합니다.")
 
 # --- 사이드바 ---
 st.sidebar.header("🔑 키 입력")
-user_key_input = st.sidebar.text_input("공공데이터포털 키 (Decoding 추천)", type="password")
+# 선생님이 가진 키(056031f...)를 그대로 넣으세요.
+user_key_input = st.sidebar.text_input("공공데이터포털 키", type="password")
 
 # --- 메인 기능 ---
 st.subheader("🔢 PNU 코드 입력")
 pnu_input = st.text_input("PNU 코드 (19자리)", "1159010700100840008")
 
-# --- 테스트할 주소 목록 (선생님 권한에 맞춰 순서 최적화) ---
-API_CANDIDATES = [
-    # 1순위: 선생님 마이페이지에 있는 서비스 (가장 유력)
-    {"name": "1. 토지이용'규제' (RegulationInfo) - 정답", "url": "http://apis.data.go.kr/1613000/LandUseRegulationInfoService/getLandUseRegulationInfo"},
-    # 2순위: 다른 토지 관련 서비스
-    {"name": "2. 토지이용'계획' (NSLandUseInfo)", "url": "http://apis.data.go.kr/1613000/NSLandUseInfoService/getLandUsePlanInfo"},
-    {"name": "3. 도시계획 (UrbanPlanning)", "url": "http://apis.data.go.kr/1613000/UrbanPlanningStatisticsService/getUrbanPlanningStatistics"}
-]
+# --- [핵심 수정] 선생님 권한에 딱 맞춘 HTTPS 주소 ---
+# 선생님 마이페이지에 적힌 End Point가 'arLandUseInfoService'입니다.
+TARGET_API = {
+    "name": "토지이용규제 (arLandUseInfo) - HTTPS 적용",
+    "url": "https://apis.data.go.kr/1613000/arLandUseInfoService/getLandUseAttr"
+}
 
-if st.button("🚀 분석 시작 (키 자동 변환)"):
+if st.button("🚀 정밀 진단 시작"):
     if not user_key_input:
         st.error("👈 왼쪽 사이드바에 키를 입력해주세요!")
     else:
-        st.write("🔍 맞는 열쇠를 찾는 중입니다...")
+        st.write("CONNECTING... 서버와 통신을 시도합니다.")
         
-        # 키 자동 변환 로직
+        # 1. 키 처리 (공백 제거)
         raw_key = user_key_input.strip()
+        
+        # 2. 인코딩/디코딩 버전 모두 준비
         decoded_key = urllib.parse.unquote(raw_key) 
         encoded_key = urllib.parse.quote(decoded_key)
         
         keys_to_try = [decoded_key, encoded_key]
-        success_flag = False
+        success = False
         
-        for api in API_CANDIDATES:
-            if success_flag: break
+        # 키 2가지 버전으로 시도
+        for k in keys_to_try:
+            # HTTPS 강제 적용 URL
+            final_url = f"{TARGET_API['url']}?serviceKey={k}&pnu={pnu_input}&format=xml"
             
-            for k in keys_to_try:
-                # API 호출 (pnu 파라미터 사용)
-                target_url = f"{api['url']}?serviceKey={k}&pnu={pnu_input}&format=xml"
+            try:
+                # verify=False로 인증서 문제 우회
+                res = requests.get(final_url, timeout=10, verify=False)
                 
-                try:
-                    res = requests.get(target_url, timeout=5, verify=False)
-                    if res.status_code == 200:
-                        try:
-                            root = ET.fromstring(res.content)
-                            header_msg = root.findtext(".//resultMsg")
-                            
-                            # 정상 응답 확인
-                            if header_msg and "NORMAL SERVICE" in header_msg:
-                                st.success(f"🎉 성공! **[{api['name']}]** 서비스로 문이 열렸습니다!")
-                                success_flag = True
-                                
-                                # 결과 데이터 파싱 및 표시
-                                found_list = []
-                                target_area = "정보 없음"
-                                
-                                for elem in root.iter():
-                                    if elem.text and len(elem.text) > 1:
-                                        # 용도지역 관련 단어 찾기
-                                        if any(x in elem.text for x in ["지역", "지구", "구역"]):
-                                            found_list.append(elem.text)
-                                            # 핵심 용도지역 추출 로직
-                                            if "종" in elem.text and "주거" in elem.text: target_area = elem.text
-                                            elif "상업" in elem.text and "지역" in elem.text: target_area = elem.text
+                # 결과 화면에 출력 (디버깅용)
+                st.code(f"응답 코드: {res.status_code}\n응답 내용: {res.text[:300]}...", language="xml")
 
-                                st.info(f"📜 조회된 규제 정보: {', '.join(list(set(found_list)))}")
-                                
-                                if target_area != "정보 없음":
-                                    st.write(f"👉 **핵심 용도지역: {target_area}**")
-                                    # 건폐율/용적률 자동 계산 (단순 예시)
-                                    bc, far = 60, 200
-                                    if "1종" in target_area: bc, far = 60, 150
-                                    elif "2종" in target_area: bc, far = 60, 200
-                                    elif "3종" in target_area: bc, far = 50, 250
-                                    elif "준주거" in target_area: bc, far = 60, 400
-                                    elif "상업" in target_area: bc, far = 60, 800
-                                    
-                                    c1, c2 = st.columns(2)
-                                    c1.metric("예상 건폐율", f"{bc}%")
-                                    c2.metric("예상 용적률", f"{far}%")
-                                else:
-                                    st.warning("용도지역 정보를 명확히 찾지 못했습니다. PNU를 확인해주세요.")
-                                break 
-                        except: pass
-                except: pass
+                if res.status_code == 200:
+                    root = ET.fromstring(res.content)
+                    header_msg = root.findtext(".//resultMsg")
+                    
+                    if header_msg and "NORMAL SERVICE" in header_msg:
+                        st.success(f"🎉 **성공했습니다!** (HTTPS 접속 해결)")
+                        
+                        # 데이터 파싱
+                        items = []
+                        for elem in root.iter():
+                            if elem.text and any(x in elem.text for x in ["지역", "지구", "구역"]):
+                                items.append(elem.text)
+                        
+                        if items:
+                            st.success(f"📜 조회 결과: {', '.join(list(set(items)))}")
+                        else:
+                            st.warning("접속은 성공했으나, 해당 PNU에 대한 규제 정보가 없습니다.")
+                        success = True
+                        break
+                    else:
+                        # 200 OK지만 에러 메시지가 온 경우
+                        st.error(f"❌ 접속은 됐지만 거절당했습니다: {header_msg}")
+                        if "SERVICE_KEY_IS_NOT_REGISTERED" in str(res.content):
+                            st.warning("진단: 키는 맞는데 '등록되지 않음'으로 뜹니다. (서버 동기화 문제 가능성)")
+                        elif "SERVICE_ACCESS_DENIED" in str(res.content):
+                            st.warning("진단: 키는 맞는데 '접근 권한'이 없습니다. (활용신청 문제)")
+            except Exception as e:
+                st.error(f"⚠️ 통신 오류 발생: {e}")
 
-        if not success_flag:
-            st.error("🚫 실패했습니다.")
-            st.markdown("""
-            **체크리스트:**
-            1. **[토지이용규제법령정보]** 키를 넣었는지 확인하세요. (건축HUB 키 ❌)
-            2. 키를 발급받은 지 1시간이 지났는지 확인하세요.
-            """)
+        if not success:
+            st.error("🚫 모든 시도가 실패했습니다. 위의 '응답 내용'을 확인해주세요.")
+
